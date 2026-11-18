@@ -1,0 +1,356 @@
+"""GasifyAI Digital Twin — interactive demonstration and real-data retraining.
+Deploy entrypoint: streamlit_app.py. No credentials or paid API required.
+"""
+from pathlib import Path
+import io
+import json
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import streamlit as st
+import joblib
+from model_core import (
+    REFERENCE_CASE as R, INPUTS, OUTPUTS, FRACTIONS, LHV_MJ_KG,
+    predict, validate_data, train_surrogate, create_illustrative_dataset,
+    export_js_coefficients
+)
+
+ROOT = Path(__file__).parent
+st.set_page_config(page_title='GasifyAI | MSW–SS Digital Twin',page_icon='⚗️',layout='wide',initial_sidebar_state='expanded')
+st.markdown('''
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+html, body, [class*="css"], [data-testid="stApp"] {font-family:'DM Sans',sans-serif;}
+[data-testid="stAppViewContainer"] {background:linear-gradient(135deg,#06101e 0%,#081b2d 60%,#101c32 100%);color:#e8f2ff;}
+[data-testid="stSidebar"] {background:#071324;border-right:1px solid #1e3850;}
+.block-container {padding-top:1.8rem;padding-bottom:2.5rem; max-width:1500px;}
+h1,h2,h3 {font-family:'Space Grotesk',sans-serif !important; letter-spacing:-.025em;}
+h1 {color:#f6fbff !important;} h2,h3 {color:#cceafa !important;}
+[data-testid="stMetric"] {background:linear-gradient(145deg,#10263d,#0b1b2e);border:1px solid #213d57;border-radius:15px;padding:18px 16px;}
+[data-testid="stMetricLabel"] {color:#93b7d2;} [data-testid="stMetricValue"] {color:#e8fcff;}
+[data-testid="stTabs"] button {font-weight:600;}
+.stAlert {border-radius:14px;} div[data-testid="stVerticalBlockBorderWrapper"] {border-radius:15px;}
+div.stButton>button[kind="primary"] {background:linear-gradient(90deg,#08b9b8,#187ce4);border:0; color:white;font-weight:700;}
+#MainMenu,footer {visibility:hidden;}
+</style>
+''',unsafe_allow_html=True)
+
+CHART_COLORS=['#36d9d0','#4a9ef9','#ffbf6d','#b18dff','#8395a9']
+ASPEN_REPORTED_R2_TRAIN = [0.999487,0.993714,0.992735,0.999284,0.998699]
+ASPEN_REPORTED_R2_TEST  = [0.999514,0.994044,0.991901,0.999113,0.998798]
+
+@st.cache_resource
+def get_demo():
+    return joblib.load(ROOT/'models'/'demo_surrogate.joblib')
+
+@st.cache_resource
+def get_packaged_aspen():
+    path = ROOT/'models'/'aspen_surrogate.joblib'
+    return joblib.load(path) if path.exists() else None
+
+if 'session_result' not in st.session_state:
+    st.session_state.session_result = None
+
+demo=get_demo()
+packaged_aspen=get_packaged_aspen()
+with st.sidebar:
+    st.markdown('## ⚗️ GASIFY<span style="color:#39dacf">AI</span>',unsafe_allow_html=True)
+    st.caption('CO-GASIFICATION • INTELLIGENCE PLATFORM')
+    st.divider()
+    modes=['Illustrative demo model','My uploaded Aspen dataset']
+    if packaged_aspen is not None:
+        modes.insert(1,'Packaged Aspen-trained model')
+    data_mode=st.radio('Model source', modes,help='Real-data mode requires a CSV upload and training in the Data Lab tab.')
+    is_uploaded=(data_mode=='My uploaded Aspen dataset' and st.session_state.session_result is not None)
+    is_packaged=(data_mode=='Packaged Aspen-trained model' and packaged_aspen is not None)
+    bundle=st.session_state.session_result if is_uploaded else (packaged_aspen if is_packaged else demo)
+    model,meta=bundle['model'],bundle['meta']
+    is_demo=meta['source'].startswith('ILLUSTRATIVE')
+    if is_demo:
+        st.warning('DEMONSTRATION DATA · Not a validated Aspen surrogate', icon='⚠️')
+    else:
+        st.success('Model trained from real-data CSV (user-supplied)')
+    st.caption('Input domain derived from the current model:')
+    st.code(f"MSW: {meta['input_range']['MSW'][0]:g}–{meta['input_range']['MSW'][1]:g} kg/h\nAIR: {meta['input_range']['AIR'][0]:g}–{meta['input_range']['AIR'][1]:g} kg/h")
+    st.divider()
+    st.markdown('**Reference process**')
+    st.caption('Aspen Plus export (TEA workbook)')
+    st.write('MSW **184 kg/h** · SS **1 kg/h**')
+    st.write('Air **96.5 kg/h** · Agent **376.08 kg/h**')
+    st.caption('Reference Aspen point is distinct from the AI Model Builder screenshot dataset.')
+    st.divider()
+    st.caption('B.Tech Chemical Engineering  •  Research & presentation prototype')
+
+st.markdown('''<div style="letter-spacing:.13em;color:#40d4cf;font-weight:700;font-size:12px">ASPEN PLUS × MACHINE LEARNING × PROCESS ECONOMICS</div>''',unsafe_allow_html=True)
+st.title('GasifyAI — Process Digital Twin')
+st.write('Interactive MSW–sewage sludge gasification surrogate · Scenario exploration · Energy integration · Economic insights')
+if is_demo:
+    st.info('**Evidence boundary:** The ML predictions here are from an illustrative, Aspen-anchored synthetic dataset. The independently reported Aspen AI Model Builder scores are shown in the Evidence tab; they are **not** performance results for this trained demo model.')
+else:
+    st.success('Predictions are generated by a new model trained on your uploaded CSV. Accuracy is relative to that dataset, not to physical plant measurements.')
+
+tabs=st.tabs(['📊 Overview','🎛️ Live Simulator','📈 Sensitivity Lab','🔥 Heat Integration','💰 TEA Studio','🧠 Model Diagnostics','📁 Data & Deployment','🧾 Evidence'])
+
+# Helper methods
+
+def style_chart(fig,height=365):
+    fig.update_layout(template='plotly_dark',height=height,paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(6,21,35,.3)',
+        font=dict(color='#d6e8f5',family='Arial'),margin=dict(l=25,r=22,t=50,b=30),
+        legend=dict(orientation='h',y=-.2),colorway=CHART_COLORS)
+    fig.update_xaxes(showgrid=True,gridcolor='rgba(130,167,190,.13)',zeroline=False)
+    fig.update_yaxes(showgrid=True,gridcolor='rgba(130,167,190,.13)',zeroline=False)
+    return fig
+
+
+def plot(fig):st.plotly_chart(style_chart(fig),use_container_width=True,config={'displaylogo':False})
+
+
+def fractions_pie(pred):
+    fig=go.Figure(go.Pie(labels=['CO','H₂','CO₂','CH₄','Other (H₂O, N₂, O₂, etc.)'],
+        values=[pred[c] for c in FRACTIONS]+[pred['OTHER_FRAC']],hole=.67,
+        marker=dict(colors=CHART_COLORS),textinfo='percent',hovertemplate='%{label}: %{percent}<extra></extra>'))
+    fig.update_layout(title='Predicted product gas · mass fraction')
+    return fig
+
+
+def quick_predict(msw,air):
+    return predict(model,float(msw),float(air),meta['input_range'])
+
+
+def annual_energy_estimate(pred,heat_kw=R['EXTERNAL_HEAT_KW'],hours=R['ON_STREAM_HOURS']):
+    # Simplified screen: all external heater energy comes from product gas at assumed thermal efficiency.
+    saleable = max(0., pred['GAS_LHV_GJ_H'] - heat_kw*0.0036/R['HEATER_EFFICIENCY'])
+    return saleable*hours
+
+msw_baseline=float(np.clip(R['MSW'],*meta['input_range']['MSW']))
+air_baseline=float(np.clip(R['AIR'],*meta['input_range']['AIR']))
+base_prediction=quick_predict(msw_baseline,air_baseline)
+reference_in_domain=(meta['input_range']['MSW'][0]<=R['MSW']<=meta['input_range']['MSW'][1] and meta['input_range']['AIR'][0]<=R['AIR']<=meta['input_range']['AIR'][1])
+
+with tabs[0]:
+    if not reference_in_domain:
+        st.warning('The current model does not contain the workbook reference conditions. Overview model values use the nearest in-range inputs; no like-for-like comparison is possible.')
+    a,b,c,d=st.columns(4)
+    a.metric('Gas output · model',f"{base_prediction['SYNGAS']:,.1f} kg/h",help='At the selected reference or closest in-range point, not the recorded Aspen output')
+    b.metric('Gas LHV · model',f"{base_prediction['GAS_LHV_GJ_H']:.3f} GJ/h")
+    c.metric('As-reported Aspen gas',f"{R['SYNGAS']:.1f} kg/h")
+    d.metric('Base heat recovered',f"{R['B1_RECOVERY_KW']:.1f} kW")
+    l,r=st.columns([1.1,1])
+    with l:
+        st.subheader('From process simulation to rapid insights')
+        st.write('**Aspen baseline → structured dataset → trained surrogate → interactive design-space exploration → energy and economic screening.**')
+        st.markdown('**Data provenance:** The documented Aspen stream export supplies one physical reference point. The illustration generator creates 780 mathematical scenarios around it. Upload your own Aspen sensitivity CSV to obtain a genuine Aspen-trained model.')
+        st.markdown('**Study boundary:** MSW and air are adjustable. Sewage sludge (1 kg/h) and gasifying-agent feed (376.08 kg/h) stay fixed at the reference export values.')
+        st.caption('Screenshots from Aspen AI Model Builder represent a separate, user-reported LassoCV model. This dashboard uses a reproducible polynomial Ridge surrogate.')
+        fig=go.Figure()
+        names=['Feed inputs','Syngas','Residue']
+        fig.add_trace(go.Sankey(
+            node=dict(label=['MSW','SS','Air','CO₂/H₂O agent','Total inlet','Predicted gas','Inferred residue'],
+                      color=['#37d9d0','#8cd8db','#4a9ef9','#8196ad','#6d8dad','#15c9bd','#e4a15c'],pad=17,thickness=15),
+            link=dict(source=[0,1,2,3,4,4],target=[4,4,4,4,5,6],
+                      value=[R['MSW'],R['SS'],R['AIR'],R['AGENT'],base_prediction['SYNGAS'],max(0,base_prediction['RESIDUE_INFERRED_KG_H'])],
+                      color=['rgba(40,209,200,.33)']*4+['rgba(40,209,200,.5)','rgba(224,157,88,.5)'])))
+        # Diagram conserves overall inlet/outlet mass at the specified fixed streams; not reaction pathways.
+        fig.update_layout(title='Flow inputs and indicative output (kg/h)',height=355)
+        st.plotly_chart(style_chart(fig),use_container_width=True)
+    with r:
+        st.plotly_chart(style_chart(fractions_pie(base_prediction),410),use_container_width=True)
+        if reference_in_domain:
+            fig=go.Figure()
+            categories=['Syngas kg/h','CO wt%','H₂ wt%','CO₂ wt%','CH₄ wt%']
+            refer=np.array([R['SYNGAS']]+[100*R[c] for c in FRACTIONS]); calc=np.array([base_prediction['SYNGAS']]+[100*base_prediction[c] for c in FRACTIONS])
+            for i,(lab,x,y) in enumerate(zip(categories,refer,calc)):
+                fig.add_trace(go.Bar(x=[x,y],y=['Aspen export','Current model'],orientation='h',name=lab,visible=True if i==0 else 'legendonly'))
+            fig.update_layout(title='Reference comparison · select a series in legend',barmode='group',height=310)
+            st.plotly_chart(style_chart(fig,310),use_container_width=True)
+
+with tabs[1]:
+    st.subheader('Live what-if prediction')
+    st.caption('Adjust both feed rates. Predictions are accepted only inside the training domain.')
+    with st.form('predict_form'):
+        c1,c2=st.columns(2)
+        with c1:
+            msw=st.slider('MSW feed rate · kg/h',min_value=float(meta['input_range']['MSW'][0]),max_value=float(meta['input_range']['MSW'][1]),value=msw_baseline,step=1.0)
+        with c2:
+            air=st.slider('Air feed rate · kg/h',min_value=float(meta['input_range']['AIR'][0]),max_value=float(meta['input_range']['AIR'][1]),value=air_baseline,step=.5)
+        submitted=st.form_submit_button('⚡ Run AI prediction',type='primary',use_container_width=True)
+    p=quick_predict(msw,air)
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric('Predicted syngas',f"{p['SYNGAS']:.2f} kg/h")
+    c2.metric('Calculated LHV',f"{p['GAS_LHV_MJ_KG']:.3f} MJ/kg")
+    c3.metric('Inferred solid residue',f"{p['RESIDUE_INFERRED_KG_H']:.2f} kg/h")
+    c4.metric('Estimated saleable energy',f"{annual_energy_estimate(p):,.0f} GJ/year")
+    l,r=st.columns([1,1])
+    with l: st.plotly_chart(style_chart(fractions_pie(p),440),use_container_width=True)
+    with r:
+        fracdf=pd.DataFrame({'Component':['CO','H₂','CO₂','CH₄','Other'],'Mass fraction':[p[k] for k in FRACTIONS]+[p['OTHER_FRAC']]})
+        fig=px.bar(fracdf,x='Component',y='Mass fraction',color='Component',color_discrete_sequence=CHART_COLORS,title='Species composition (mass fraction)')
+        plot(fig)
+        st.dataframe(fracdf.assign(**{'Mass fraction':lambda x:x['Mass fraction'].map(lambda y:f'{y:.4%}')}),hide_index=True,use_container_width=True)
+    st.caption('**Inferred residue** follows a total-mass closure assuming constant SS and agent supply; it is not a separately trained ash/char predictor. The saleable-energy estimate also assumes the workbook heater-duty and efficiency basis.')
+    st.download_button('Download prediction as CSV',pd.DataFrame([{'MSW':msw,'AIR':air,**p,'MODEL_SOURCE':meta['source']}]).to_csv(index=False),'gasifyai_prediction.csv','text/csv')
+
+with tabs[2]:
+    st.subheader('Process sensitivity explorer')
+    c1,c2=st.columns(2)
+    fixed_air=c1.slider('Fixed air · kg/h',float(meta['input_range']['AIR'][0]),float(meta['input_range']['AIR'][1]),air_baseline,step=.5,key='fixair')
+    fixed_msw=c2.slider('Fixed MSW · kg/h',float(meta['input_range']['MSW'][0]),float(meta['input_range']['MSW'][1]),msw_baseline,step=1.0,key='fixmsw')
+    xs=np.linspace(*meta['input_range']['MSW'],60)
+    ya=np.linspace(*meta['input_range']['AIR'],60)
+    pr_m=model.predict(np.column_stack([xs,np.full_like(xs,fixed_air)]))
+    pr_a=model.predict(np.column_stack([np.full_like(ya,fixed_msw),ya]))
+    c1,c2=st.columns(2)
+    with c1:
+        fig=go.Figure()
+        fig.add_trace(go.Scatter(x=xs,y=pr_m[:,0],mode='lines',name='Syngas',line=dict(color='#35d6d1',width=3)))
+        fig.update_layout(title='Syngas response to MSW feed',xaxis_title='MSW · kg/h',yaxis_title='Syngas · kg/h')
+        plot(fig)
+    with c2:
+        fig=go.Figure()
+        for i,j in enumerate(FRACTIONS):
+            fig.add_trace(go.Scatter(x=ya,y=100*pr_a[:,i+1],mode='lines',name=j.replace('_FRAC',''),line=dict(color=CHART_COLORS[i],width=3)))
+        fig.update_layout(title='Gas composition response to air',xaxis_title='Air · kg/h',yaxis_title='Mass fraction · %')
+        plot(fig)
+    gx=np.linspace(*meta['input_range']['MSW'],35);gy=np.linspace(*meta['input_range']['AIR'],35)
+    X,Y=np.meshgrid(gx,gy)
+    q=model.predict(np.column_stack([X.ravel(),Y.ravel()]))
+    lhv=(q[:,0]*sum(q[:,i+1]*LHV_MJ_KG[fr] for i,fr in enumerate(FRACTIONS) if fr in LHV_MJ_KG)/1000).reshape(X.shape)
+    fig=go.Figure(go.Heatmap(x=gx,y=gy,z=lhv,colorscale=[[0,'#102f58'],[.4,'#097c9e'],[1,'#51dfbd']],colorbar=dict(title='GJ/h')))
+    fig.update_layout(title='2D response surface: predicted gross gas LHV (GJ/h)',xaxis_title='MSW · kg/h',yaxis_title='Air · kg/h')
+    st.plotly_chart(style_chart(fig,430),use_container_width=True)
+    st.caption('Surfaces are a visual interpolation of the currently selected trained model; they do not establish an independently optimized process operating point.')
+
+with tabs[3]:
+    st.subheader('Heat Integration Studio')
+    st.write('Compare an *inferred* no-exchanger case, the existing B1 heat recovery documented in the workbook, and a hypothetical added recovery case.')
+    extra=st.slider('Additional feasible heat recovery · kW (hypothetical)',0.0,float(R['EXOTHERM_KW']),25.0,step=.5)
+    rec=R['B1_RECOVERY_KW']; heat=R['EXTERNAL_HEAT_KW']; cool=R['EXTERNAL_COOL_KW']
+    compare=pd.DataFrame({
+        'Case':['No internal recovery (counterfactual)','B1 exchanger (Aspen export)','B1 + proposed extra recovery'],
+        'Heating · kW':[heat+rec,heat,max(0.,heat-extra)],
+        'Cooling · kW':[cool+rec,cool,max(0.,cool-extra)],
+        'Heat recovered · kW':[0,rec,rec+extra],
+    })
+    l,r=st.columns([1.2,1])
+    with l:
+        fig=go.Figure()
+        fig.add_trace(go.Bar(x=compare['Case'],y=compare['Heating · kW'],name='External heating',marker_color='#fb9a73'))
+        fig.add_trace(go.Bar(x=compare['Case'],y=compare['Cooling · kW'],name='External cooling',marker_color='#50cfcf'))
+        fig.update_layout(title='Heating & cooling requirements',yaxis_title='Thermal duty · kW',barmode='group')
+        plot(fig)
+    with r:
+        k1,k2=st.columns(2)
+        k1.metric('B1 recovery · observed',f'{rec:.2f} kW')
+        k2.metric('Extra potential · proposed',f'{extra:.1f} kW')
+        st.metric('Potential extra heat reuse',f'{extra*R["ON_STREAM_HOURS"]*0.0036:,.0f} GJ/year')
+        st.dataframe(compare.style.format({'Heating · kW':'{:.2f}','Cooling · kW':'{:.2f}','Heat recovered · kW':'{:.2f}'}),hide_index=True,use_container_width=True)
+    st.caption('The source workbook attributes 39.80 kW to exchanger B1 and already accounts for it. Extra heat recovery is **not** an Aspen-verified network and would require pinch/temperature-feasibility analysis, equipment cost and pressure-drop checks. No double credit is applied to the baseline.')
+
+with tabs[4]:
+    st.subheader('TEA Studio · indicative financial scenario')
+    st.warning('Financial indicators below are workbook reference values plus transparent scenario deltas — **not** a re-execution of the full Excel discounted-cash-flow model.')
+    a,b=st.columns(2)
+    price=a.slider('Assumed product-gas selling price · USD/GJ',0.0,150.0,float(R['PRODUCT_PRICE_USD_GJ']),step=.5)
+    extra_kw=b.slider('Proposed incremental recovery beyond B1 · kW',0.0,65.0,0.0,step=1.0)
+    rate=R['DISCOUNT_RATE']
+    pv_weights=sum((0.6 if year==1 else 0.8 if year==2 else 1.0)/(1+rate)**(R['CONSTRUCTION_YEARS']+year) for year in range(1,R['YEARS']+1))
+    add_sellable=extra_kw*R['ON_STREAM_HOURS']*0.0036/R['HEATER_EFFICIENCY']
+    delta_annual=(price-R['PRODUCT_PRICE_USD_GJ'])*R['SALEABLE_GJ_YEAR']+price*add_sellable
+    rough_npv=R['NPV_USD']+delta_annual*pv_weights
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric('Reference CAPEX',f'${R["CAPEX_USD"]/1e6:.2f} M')
+    c2.metric('Reference OPEX',f'${R["OPEX_USD_YR"]/1000:,.0f}k / yr')
+    c3.metric('Workbook NPV',f'${R["NPV_USD"]/1e6:.2f} M')
+    c4.metric('Scenario NPV · indicative',f'${rough_npv/1e6:.2f} M')
+    t=np.linspace(0,150,151)
+    scenario_npvs=R['NPV_USD'] + ((t-R['PRODUCT_PRICE_USD_GJ'])*R['SALEABLE_GJ_YEAR']+t*add_sellable)*pv_weights
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=t,y=scenario_npvs/1e6,mode='lines',name='Indicative NPV',line=dict(color='#33d9cb',width=3)))
+    fig.add_hline(y=0,line_dash='dash',line_color='#ffaf74',annotation_text='Zero-NPV line')
+    fig.add_trace(go.Scatter(x=[price],y=[rough_npv/1e6],name='Selected scenario',mode='markers',marker=dict(size=13,color='#ffbf6d')))
+    fig.update_layout(title='Price sensitivity — fixed base plant capacity',xaxis_title='Assumed selling price · USD/GJ',yaxis_title='Indicative NPV · USD millions')
+    st.plotly_chart(style_chart(fig,415),use_container_width=True)
+    st.caption('Delta model: ΔNPV = PV factor × [(P − $4/GJ) × 6,232.34 GJ/year + P × (additional heat recovered / 85% heater efficiency)]. Applies user-selected sale price to the baseline capacity, 20 operating years, 10% discount, 2 construction years and 60%/80% initial ramp. Taxes, additional exchanger CAPEX, changes in operating costs, export constraints, and equipment feasibility are **not** recalculated. The workbook minimum selling price is $100.40/GJ; this simplified graph may not reproduce it.')
+
+with tabs[5]:
+    st.subheader('ML Model Diagnostics')
+    st.caption(f"Model: {meta['model']} · Source: {meta['source']} · {meta['n_samples']} records")
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric('Sample count',f"{meta['n_samples']:,}")
+    c2.metric('Holdout size',f"{meta['n_test']:,}")
+    c3.metric('Testing mean R²',f"{np.mean([meta['metrics'][k]['r2'] for k in OUTPUTS]):.5f}")
+    c4.metric('Unseen-MSW mean R²',f"{np.mean([meta['group_metrics'][k]['r2'] for k in OUTPUTS]):.5f}")
+    perf=pd.DataFrame({'Output':OUTPUTS,
+      'Random split R²':[meta['metrics'][k]['r2'] for k in OUTPUTS],
+      'Unseen-MSW R²':[meta['group_metrics'][k]['r2'] for k in OUTPUTS],
+      'MAE':[meta['metrics'][k]['mae'] for k in OUTPUTS]})
+    fig=go.Figure()
+    for k,color in [('Random split R²','#3ddccf'),('Unseen-MSW R²','#5b9ded')]:
+        fig.add_trace(go.Bar(x=perf['Output'],y=perf[k],name=k,marker_color=color))
+    fig.update_layout(title='Held-out predictive fit (current model)',barmode='group',yaxis_title='R²',yaxis_range=[min(0.,perf[['Random split R²','Unseen-MSW R²']].min().min()),1.02])
+    plot(fig)
+    st.dataframe(perf.style.format({'Random split R²':'{:.6f}','Unseen-MSW R²':'{:.6f}','MAE':'{:.6g}'}),hide_index=True,use_container_width=True)
+    select=st.selectbox('Parity plot variable',OUTPUTS)
+    diag=bundle.get('diagnostics')
+    if diag is None:
+        # Reconstruct split for included trusted demo dataset.
+        from sklearn.model_selection import train_test_split
+        q=create_illustrative_dataset();_,idx=train_test_split(np.arange(len(q)),test_size=.2,random_state=42)
+        diag=q.iloc[idx].copy()
+        yp=model.predict(diag[INPUTS])
+        for i,k in enumerate(OUTPUTS):diag['PRED_'+k]=yp[:,i]
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=diag[select],y=diag['PRED_'+select],mode='markers',name='Held-out samples',marker=dict(color='#42d8d3',size=5,opacity=.55)))
+    lo=float(min(diag[select].min(),diag['PRED_'+select].min()));hi=float(max(diag[select].max(),diag['PRED_'+select].max()))
+    fig.add_trace(go.Scatter(x=[lo,hi],y=[lo,hi],name='Perfect fit',line=dict(dash='dash',color='#ffb36d')))
+    fig.update_layout(title=f'Predicted vs observed · {select}',xaxis_title='Dataset output',yaxis_title='Model output')
+    plot(fig)
+    st.caption('For the demo, testing R² measures agreement with an illustrative mathematical generator and is NOT Aspen validation. For an uploaded CSV, it measures agreement with your uploaded Aspen samples; independent experimental validation is still required.')
+
+with tabs[6]:
+    st.subheader('Aspen dataset upload → retrain → deploy')
+    st.write('Upload Aspen Plus sensitivity results as **CSV**, with one converged case per row. The app trains a completely new polynomial/Ridge regression surrogate using your outputs.')
+    template=pd.DataFrame([{'MSW':184.,'AIR':96.5,'SYNGAS':R['SYNGAS'],**{c:R[c] for c in FRACTIONS}}])
+    st.download_button('⬇ Download Aspen CSV template',template.to_csv(index=False),'aspen_training_template.csv','text/csv')
+    file=st.file_uploader('Select Aspen-generated CSV',type=['csv'],help='Required: MSW,AIR,SYNGAS,CO_FRAC,H2_FRAC,CO2_FRAC,CH4_FRAC. Gas fractions must be mass fractions (0–1).')
+    if file is not None:
+        try:
+            if len(file.getvalue())>10_000_000: raise ValueError('Uploaded file exceeds 10 MB limit.')
+            uploaded=pd.read_csv(file)
+            validated=validate_data(uploaded)
+            st.success(f"Validated {len(validated)} unique operating points.")
+            st.dataframe(uploaded.head(10),hide_index=True,use_container_width=True)
+            if st.button('🚀 Train on my Aspen data',type='primary'):
+                with st.spinner('Fitting model and computing both holdout validation splits…'):
+                    st.session_state.session_result=train_surrogate(validated,source='USER_ASPEN_CSV_'+file.name)
+                st.success('Training complete. Choose “My uploaded Aspen dataset” in the sidebar to predict with the new model.')
+                st.rerun()
+        except Exception as ex:
+            st.error(str(ex))
+    else:
+        st.info('No uploaded Aspen CSV yet. The included 780-row dataset is demonstrative only. The single workbook case cannot support a statistically valid training/test split.')
+    st.markdown('#### Export trained model')
+    if st.session_state.session_result is not None:
+        imported=st.session_state.session_result
+        stream=io.BytesIO();joblib.dump({'model':imported['model'],'meta':imported['meta']},stream)
+        st.download_button('Download my trained model (.joblib)',stream.getvalue(),'aspen_surrogate.joblib','application/octet-stream')
+        js=json.dumps(export_js_coefficients(imported['model'],imported['meta']),indent=2)
+        st.download_button('Download browser model coefficients (.json)',js,'aspen_surrogate_coefficients.json','application/json')
+        st.download_button('Download holdout predictions (.csv)',imported['diagnostics'].to_csv(index=False),'aspen_holdout_predictions.csv','text/csv')
+    st.markdown('#### Model lifecycle')
+    st.markdown('**1.** Aspen Plus sensitivity → export tabular runs.  **2.** Validate units and cases.  **3.** Fit 2nd-order model.  **4.** Evaluate random and grouped holdout accuracy.  **5.** Deploy dashboard.  **6.** Revalidate whenever feed composition or operating range changes.')
+    st.info('Cloud deployment: upload this project to GitHub, then choose streamlit_app.py at https://share.streamlit.io. See DEPLOY.md. The browser-only dashboard in offline_dashboard/index.html runs without Python.')
+
+with tabs[7]:
+    st.subheader('Source evidence and validation boundaries')
+    st.write('These images come from the **original Aspen AI Model Builder project**, not from the synthetic training dataset shipped with this app.')
+    p1=ROOT/'assets'/'aspen_ai_validation.png';p2=ROOT/'assets'/'aspen_ai_dataset.png'
+    if p1.exists():st.image(str(p1),caption='Aspen AI Model Builder V15 · Original reported parity plots and per-output R²',use_container_width=True)
+    if p2.exists():st.image(str(p2),caption='Aspen AI Model Builder · Source data inspection and variable profiles',use_container_width=True)
+    evidence=pd.DataFrame({'Target':OUTPUTS,'Aspen AI training R²':ASPEN_REPORTED_R2_TRAIN,'Aspen AI testing R²':ASPEN_REPORTED_R2_TEST})
+    st.dataframe(evidence.style.format({'Aspen AI training R²':'{:.6f}','Aspen AI testing R²':'{:.6f}'}),hide_index=True,use_container_width=True)
+    st.metric('Aspen AI Model Builder · mean testing R²',f"{np.mean(ASPEN_REPORTED_R2_TEST):.6f}")
+    st.markdown('**Known limitations:** No raw 780-row Aspen training export, model timings, failed-convergence counts, or experimental plant data were supplied. Reported LassoCV performance and `.athm` deployment are distinct from the new demonstration Ridge model. Do not claim 100% numerical stability or millisecond inference without a reproducible benchmark.')
+    st.markdown('**Reference:** TEA source workbook `Aspen_MSW_Gasification_TEA_Model.xlsx`; sheets RAW_ASPEN_STREAM_DATA, ENERGY_AND_UTILITIES, CAPACITY_AND_PRODUCTION, INVESTMENT_METRICS. Values are a preliminary screening case and are not independently audited here.')
+    st.caption('For academic/presentation purposes; not a plant control system or a safety-critical process simulator.')
