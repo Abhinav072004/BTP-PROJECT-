@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Author** | Abhinav Singh (230008002), Final-Year Chemical Engineering, IIT Indore |
-| **Supervisor** | Dr. Rajan Singh, DUGC, Chemical Engineering, IIT Indore |
-| **Tool** | ASPEN Plus (Kinetic + Tar-integrated model) |
+| **Supervisor** |Dr.Ranjeet Kumar & Dr. Rajan Singh, Chemical Engineering, IIT Indore |
+| **Tool** | ASPEN Plus (Kinetic + Tar-integrated model), Heat Integration,Aspen AI Module Builder Model, |
 | **Reactor** | 1 kW thermal-capacity bubbling fluidized-bed gasifier |
 
 **[Open the GasifyAI presentation](https://abhinav072004.github.io/BTP-PROJECT-/)**
