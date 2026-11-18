@@ -9,8 +9,9 @@
 | **Tool** | ASPEN Plus (Kinetic + Tar-integrated model) |
 | **Reactor** | 1 kW thermal-capacity bubbling fluidized-bed gasifier |
 
-![Project Poster](images/poster.png)
-*Full project poster (click/open the image for complete details, all figures, and data tables).*
+**[Open the GasifyAI presentation](https://abhinav072004.github.io/BTP-PROJECT-/)**
+
+The browser demo includes an interactive syngas simulator, sensitivity plots, heat integration, and preliminary economics. Its Ridge model uses illustrative data. The Aspen AI Model Builder screenshots report results from a separate model.
 
 ---
 
@@ -235,10 +236,6 @@ flowchart TD
 
 ## 9. Repository Contents
 
-```
-├── README.md              # This file
-└── images/
-    └── poster.png          # Full project poster (all figures & data)
-```
-
-> **Note:** This README summarizes the poster presented for the BTP/internship project at Crest Lab, IIT Indore. Refer to `images/poster.png` for the complete set of figures (Fig. 1–8), raw plots of sensitivity analysis, and detailed process flow diagrams.
+- [GasifyAI digital twin](GasifyAI_Complete_ML_Digital_Twin/GasifyAI_Digital_Twin/README.md) contains the Streamlit app, training workflow, example data, and Windows launchers.
+- [Deployment guide](GasifyAI_Complete_ML_Digital_Twin/GasifyAI_Digital_Twin/DEPLOY.md) covers GitHub Pages, Streamlit, and local use.
+- [docs/](docs/) contains the GitHub Pages presentation and its browser assets.

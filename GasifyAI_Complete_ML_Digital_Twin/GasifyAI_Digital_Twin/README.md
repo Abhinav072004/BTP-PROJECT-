@@ -10,7 +10,7 @@ A complete **offline dashboard + Streamlit web app + trainable ML pipeline** for
 | --- | --- | --- |
 | **Offline, no installation** | Open `offline_dashboard/index.html` in Chrome/Edge. Keep the whole folder together. | Projection, viva, presentation, browser-only prediction. |
 | **Interactive web app** | `streamlit run streamlit_app.py` | Training on real Aspen CSV, richer plots, downloadable models. |
-| **Free public online demo** | GitHub Pages (`docs/`) | Share a browser link, no server or Python for viewers. |
+| **Public presentation** | [Open GasifyAI on GitHub Pages](https://abhinav072004.github.io/BTP-PROJECT-/) | Interactive browser demo with no Python installation. |
 | **Free online ML platform** | Streamlit Community Cloud | Hosted Streamlit + real-data upload/retraining. |
 
 ### Quick start on Windows
@@ -115,8 +115,8 @@ GasifyAI_Digital_Twin/
 │  ├─ index.html
 │  ├─ model_export.js            Exported fitted regression coefficients
 │  └─ assets/                   Local charts / images / CSS / JavaScript
-├─ docs/                        Same demo ready for GitHub Pages
-├─ tests/                       Unit tests
+├─ docs/                        Static dashboard source copy
+├─ tests/                       Reserved for test files
 ├─ .streamlit/config.toml        Dark theme
 ├─ requirements.txt
 ├─ DEPLOY.md

@@ -2,25 +2,19 @@
 
 ## Option 1: GitHub Pages — simplest public presentation URL
 
-1. Create a new GitHub repository (e.g. `gasifyai-digital-twin`) and upload all files in this project, including the `docs/` directory.
-2. Open repository **Settings → Pages → Build and deployment**.
-3. Select **Deploy from a branch**, branch `main`, folder **`/docs`**, then save.
-4. GitHub will display a website URL resembling `https://<your-user>.github.io/gasifyai-digital-twin/`.
-5. Open that URL during your presentation or share it with interviewers.
+The [GasifyAI presentation](https://abhinav072004.github.io/BTP-PROJECT-/) is published from `main` using the repository-root `/docs` folder. The **github-pages** deployment appears under **Deployments** on the repository's Code page.
 
-This version is **fully static** and executes the already trained, illustrative Ridge model locally in the browser. There is no Python server and no ability to upload/retrain. Commit `docs/` files together; the JavaScript file is intentionally bundled locally to avoid network-dependent charts.
+To update the presentation, commit changes to the repository-root `docs/` folder. Keep `index.html`, `model_export.js`, and `assets/` together. The page runs the illustrative Ridge model in the browser. CSV upload and retraining are available in the Streamlit app.
 
 ## Option 2: Streamlit Community Cloud — full training, dashboards and file upload
 
 1. Put the project into a GitHub repository. Keep `streamlit_app.py`, `requirements.txt`, `models/demo_surrogate.joblib`, `model_core.py`, and `.streamlit/config.toml` at the stated relative paths.
 2. Visit **https://share.streamlit.io** and sign in using GitHub.
-3. Choose **Create app**, select your repository/branch, and set **Main file path** to `streamlit_app.py`.
+3. Choose **Create app**, select your repository/branch, and set **Main file path** to `GasifyAI_Complete_ML_Digital_Twin/GasifyAI_Digital_Twin/streamlit_app.py`.
 4. Deploy. The app will receive a publicly shareable `streamlit.app` URL if your sharing settings permit it.
 5. In the app, select **Data & Deployment** to upload your genuine Aspen CSV and train. To make that model persistent across restarts, train locally with the CLI and commit `models/aspen_surrogate.joblib` to your repository, then redeploy.
 
 Streamlit's official deployment guide: https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy
-
-> **Status as delivered:** Ready for user deployment. The project has **not** been pushed to a GitHub repository, nor has a public URL been created on your behalf.
 
 ## Option 3: Windows local presentation (offline)
 
